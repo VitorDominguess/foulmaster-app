@@ -57,14 +57,29 @@ const BIDashboard: React.FC<BIDashboardProps> = ({ bets, currentBalance }) => {
   }, [settledBets]);
 
   const chartData = useMemo(() => {
-    let cumulative = 0;
-    return [...settledBets]
-      .sort((a, b) => a.timestamp - b.timestamp)
-      .map((b, idx) => {
-        cumulative += b.profit;
-        return { name: idx + 1, value: cumulative };
-      });
-  }, [settledBets]);
+  const dailyMap: Record<string, number> = {};
+
+  settledBets.forEach(b => {
+    const day = new Date(b.timestamp).toISOString().slice(0, 10); // YYYY-MM-DD
+    dailyMap[day] = (dailyMap[day] || 0) + b.profit;
+  });
+
+  let cumulative = 0;
+
+  return Object.entries(dailyMap)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([day, dailyProfit]) => {
+      cumulative += dailyProfit;
+      return {
+        name: new Date(day).toLocaleDateString('pt-BR', {
+          day: '2-digit',
+          month: 'short'
+        }),
+        value: cumulative
+      };
+    });
+}, [settledBets]);
+
 
   if (settledBets.length === 0) {
     return (
