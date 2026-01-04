@@ -8,69 +8,62 @@ import {
   Bar,
   ScatterChart,
   Scatter,
+  AreaChart,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
-  AreaChart,
   Area,
   ReferenceLine,
-  Cell
+  Cell,
+  Legend,
+  ErrorBar
 } from 'recharts';
-
-// ✅ 1. IMPORTAÇÃO DOS SEUS TIPOS ORIGINAIS
-// Se o caminho for diferente, ajuste aqui.
-import { Bet, BetStatus } from '../types';
-
-// ✅ 2. INTERFACE ESTENDIDA E PROPS FLEXÍVEIS
-// Isso garante que o componente aceite os dados mesmo se tiverem campos extras
-type DashboardBet = Bet & {
-  iaPrediction?: number;
-  bookieLine?: number;
-  actualResult?: number;
-  // O "Coringa" para aceitar nomes snake_case ou propriedades extras sem erro
-  [key: string]: any;
-};
+import { CalendarIcon, FunnelIcon } from '@heroicons/react/24/outline';
+import { Bet, BetStatus, BetType } from '../types';
 
 interface BIDashboardProps {
-  // Aceita Array do seu tipo modificado OU Array de qualquer coisa (pra não travar build)
-  bets: DashboardBet[] | any[]; 
-  currentBalance?: number; 
+  bets: Bet[];
 }
 
-// --- HELPERS ---
-const formatBRL = (v: number) =>
-  new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v);
+// --- CONFIGURAÇÃO VISUAL ---
+const COLORS = {
+  profit: '#10b981', // Emerald 500
+  loss: '#f43f5e',   // Rose 500
+  line: '#3b82f6',   // Blue 500
+  line2: '#8b5cf6',  // Violet 500
+  grid: '#1e293b',   // Slate 800
+  text: '#94a3b8',   // Slate 400
+  darkBg: '#0f172a', // Slate 900
+};
 
-const formatPct = (v: number) => `${v.toFixed(1)}%`;
+const formatCurrency = (val: number) => `R$ ${val.toFixed(2)}`;
+const formatPct = (val: number) => `${val.toFixed(1)}%`;
 
 // --- COMPONENTES UI ---
-const Card = ({ title, children, className = '' }: any) => (
-  <div className={`bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm ${className}`}>
-    <h3 className="text-slate-400 text-xs font-bold uppercase tracking-wider mb-4">{title}</h3>
-    {children}
-  </div>
-);
-
-const KPICard = ({ label, value, sub, color = 'text-white' }: any) => (
-  <div className="bg-slate-900 border border-slate-800 p-6 rounded-xl">
-    <p className="text-slate-500 text-xs uppercase font-semibold">{label}</p>
-    <p className={`text-2xl font-black mt-1 ${color}`}>{value}</p>
-    {sub && <p className="text-xs text-slate-400 mt-2">{sub}</p>}
+const Card = ({ title, subtitle, children, className = '' }: any) => (
+  <div className={`bg-slate-900/60 border border-slate-800 rounded-3xl p-6 shadow-xl backdrop-blur-sm flex flex-col ${className}`}>
+    <div className="mb-6">
+      <h3 className="text-slate-100 font-bold text-lg">{title}</h3>
+      {subtitle && <p className="text-slate-500 text-xs uppercase tracking-wider font-bold mt-1">{subtitle}</p>}
+    </div>
+    <div className="flex-1 w-full min-h-[250px]">
+      {children}
+    </div>
   </div>
 );
 
 const CustomTooltip = ({ active, payload, label, formatter }: any) => {
   if (active && payload && payload.length) {
     return (
-      <div className="bg-slate-950 border border-slate-800 p-3 rounded shadow-xl text-xs">
+      <div className="bg-slate-950 border border-slate-800 p-3 rounded-xl shadow-2xl text-xs z-50">
         <p className="font-bold text-slate-200 mb-2">{label}</p>
         {payload.map((p: any, i: number) => (
           <div key={i} className="flex items-center gap-2 mb-1">
-            <span className="w-2 h-2 rounded-full" style={{ backgroundColor: p.color }} />
+            <span className="w-2 h-2 rounded-full" style={{ backgroundColor: p.color || p.fill }} />
             <span className="text-slate-400 capitalize">{p.name}:</span>
             <span className="font-mono text-slate-200 font-bold">
-              {formatter ? formatter(p.value) : p.value}
+              {formatter ? formatter(p.value) : (typeof p.value === 'number' ? p.value.toFixed(2) : p.value)}
             </span>
           </div>
         ))}
@@ -80,377 +73,375 @@ const CustomTooltip = ({ active, payload, label, formatter }: any) => {
   return null;
 };
 
-// --- COMPONENTE PRINCIPAL ---
-const BettingAIDashboard: React.FC<BIDashboardProps> = ({ bets }) => {
-  // 1. STATE & FILTROS
-  const [daysFilter, setDaysFilter] = useState(30);
-  const [minEdge, setMinEdge] = useState(0.02); // 2%
-  const [minStake, setMinStake] = useState(0);
+const BIDashboard: React.FC<BIDashboardProps> = ({ bets }) => {
+  // --- ESTADO DO FILTRO DE DATA ---
+  const [dateRange, setDateRange] = useState({
+    start: new Date(new Date().setMonth(new Date().getMonth() - 1)).toISOString().split('T')[0], // Último mês default
+    end: new Date().toISOString().split('T')[0]
+  });
 
-  // 2. DATA PROCESSING
-  const { filtered, kpis, timeSeries, oddRanges, distribution, modelMetrics } = useMemo(() => {
-    const now = Date.now();
-    const cutoff = now - daysFilter * 24 * 60 * 60 * 1000;
+  // --- PROCESSAMENTO DE DADOS (CORE) ---
+  const data = useMemo(() => {
+    // 1. Filtragem Inicial
+    const startTs = new Date(dateRange.start).getTime();
+    const endTs = new Date(dateRange.end).getTime() + 86400000; // Incluir o dia final inteiro
 
-    // A. Filtragem
-    const filteredData = bets
+    const filteredBets = bets
       .filter(b => b.status !== BetStatus.OPEN && b.status !== BetStatus.VOID)
-      .filter(b => b.timestamp >= cutoff)
-      .filter(b => (b.edge || 0) >= minEdge)
-      .filter(b => b.stake >= minStake)
+      .filter(b => b.timestamp >= startTs && b.timestamp <= endTs)
       .sort((a, b) => a.timestamp - b.timestamp);
 
-    // B. Variáveis Acumuladoras
-    let accProfit = 0;
-    let accStake = 0;
-    let wins = 0;
-    let peak = 0;
-    let maxDD = 0;
+    // Variáveis Acumuladoras
+    let cumulativeProfit = 0;
+    let cumulativeEV = 0;
+    let peakProfit = -Infinity;
     
-    const dailyMap: Record<string, { profit: number; vol: number; stake: number }> = {};
-    const oddsMap: Record<string, { wins: number; total: number; profit: number }> = {
-      '1.0-1.5': { wins: 0, total: 0, profit: 0 },
-      '1.5-1.8': { wins: 0, total: 0, profit: 0 },
-      '1.8-2.0': { wins: 0, total: 0, profit: 0 },
-      '2.0-2.5': { wins: 0, total: 0, profit: 0 },
-      '2.5+': { wins: 0, total: 0, profit: 0 },
+    // Mapas para agrupamento
+    const dailyMap: Record<string, { profit: number; bets: number; ev: number }> = {};
+    const refMap: Record<string, { profit: number; count: number }> = {};
+    const typeMap: Record<string, { profit: number; count: number }> = { UNDER: { profit: 0, count: 0 }, OVER: { profit: 0, count: 0 } };
+    
+    // Arrays para Gráficos
+    const timelineData: any[] = [];
+    const scatterData: any[] = [];
+    const volatilityData: any[] = []; // Desvio padrão móvel
+    
+    // Métricas de Erro
+    let totalIaError = 0;
+    let totalBookError = 0;
+    let errorCount = 0;
+
+    // Métricas de Odds (Buckets)
+    const oddBuckets: Record<string, { profit: number; stake: number; wins: number; total: number; avgOdd: number }> = {};
+    const getBucket = (odd: number) => {
+        if (odd < 1.60) return '1.00 - 1.59';
+        if (odd < 1.75) return '1.60 - 1.75';
+        if (odd < 1.90) return '1.75 - 1.90';
+        if (odd < 2.10) return '1.90 - 2.10';
+        return '2.10+';
     };
-    
-    // Métricas de Erro (MAE)
-    let totalErrorIA = 0;
-    let totalErrorBook = 0;
-    let validComparisonCount = 0;
 
-    // C. Loop Único para Performance
-    filteredData.forEach(b => {
-      // ✅ MAPEAMENTO ROBUSTO DE DADOS (Resolve problemas de nomes diferentes)
-      // Tenta ler camelCase (iaPrediction) OU snake_case (prediction_ia)
-      const item = b as any;
-      const pred = item.iaPrediction ?? item.prediction_ia ?? item.ia_prediction;
-      const line = item.bookieLine ?? item.line_bookie ?? item.line;
-      const actual = item.actualResult ?? item.result_final ?? item.result;
-
-      // KPI basics
-      accProfit += b.profit;
-      accStake += b.stake;
-      if (b.status === BetStatus.WON) wins++;
-      
-      // Drawdown
-      peak = Math.max(peak, accProfit);
-      const currentDD = peak - accProfit;
-      maxDD = Math.max(maxDD, currentDD);
-
-      // Time Series Map
-      const dateKey = new Date(b.timestamp).toLocaleDateString('pt-BR');
-      if (!dailyMap[dateKey]) dailyMap[dateKey] = { profit: 0, vol: 0, stake: 0 };
-      dailyMap[dateKey].profit += b.profit;
-      dailyMap[dateKey].vol += 1;
-      dailyMap[dateKey].stake += b.stake;
-
-      // Odds Range Logic
-      let rangeKey = '2.5+';
-      const oddsVal = b.odds || 0;
-      if (oddsVal < 1.5) rangeKey = '1.0-1.5';
-      else if (oddsVal < 1.8) rangeKey = '1.5-1.8';
-      else if (oddsVal < 2.0) rangeKey = '1.8-2.0';
-      else if (oddsVal < 2.5) rangeKey = '2.0-2.5';
-      
-      oddsMap[rangeKey].total++;
-      oddsMap[rangeKey].profit += b.profit;
-      if (b.status === BetStatus.WON) oddsMap[rangeKey].wins++;
-
-      // Error Calculation (Só calcula se tiver os 3 dados)
-      if (pred != null && actual != null && line != null) {
-        totalErrorIA += Math.abs(pred - actual);
-        totalErrorBook += Math.abs(line - actual);
-        validComparisonCount++;
-      }
-    });
-
-    // D. Montagem dos Arrays para Gráficos
-    let runningProfit = 0;
-    let runningStake = 0;
-
-    const timeSeriesData = Object.keys(dailyMap).map(date => {
-        const day = dailyMap[date];
-        runningProfit += day.profit;
-        runningStake += day.stake;
+    // --- LOOP PRINCIPAL ---
+    filteredBets.forEach(bet => {
+        const dateKey = new Date(bet.timestamp).toLocaleDateString('pt-BR');
         
-        return {
-            date,
-            dailyProfit: day.profit,
-            accProfit: runningProfit,
-            volume: day.vol,
-            roi: runningStake > 0 ? (runningProfit / runningStake) * 100 : 0,
-            drawdown: runningProfit - Math.max(peak, runningProfit)
-        };
+        // Accumulators
+        cumulativeProfit += bet.profit;
+        peakProfit = Math.max(peakProfit, cumulativeProfit);
+        const drawdown = cumulativeProfit - peakProfit;
+        
+        // EV Calc (Stake * (%Edge / 100)) - Assumindo que bet.edge é % (ex: 5.2)
+        const evValue = bet.stake * ((bet.edge || 0) / 100);
+        cumulativeEV += evValue;
+
+        // Daily Map
+        if (!dailyMap[dateKey]) dailyMap[dateKey] = { profit: 0, bets: 0, ev: 0 };
+        dailyMap[dateKey].profit += bet.profit;
+        dailyMap[dateKey].bets += 1;
+        dailyMap[dateKey].ev += evValue;
+
+        // Referee Map
+        const refName = bet.referee || 'Desconhecido';
+        if (!refMap[refName]) refMap[refName] = { profit: 0, count: 0 };
+        refMap[refName].profit += bet.profit;
+        refMap[refName].count += 1;
+
+        // Type Map
+        const typeKey = bet.type === BetType.UNDER ? 'UNDER' : 'OVER';
+        typeMap[typeKey].profit += bet.profit;
+        typeMap[typeKey].count += 1;
+
+        // Scatter Data
+        scatterData.push({ stake: bet.stake, profit: bet.profit, name: `${bet.homeTeam} x ${bet.awayTeam}` });
+
+        // Error Metrics (IA vs Book)
+        if (bet.iaPrediction && bet.bookieLine && bet.actualFouls !== undefined) {
+            totalIaError += Math.abs(bet.iaPrediction - bet.actualFouls);
+            totalBookError += Math.abs(bet.bookieLine - bet.actualFouls);
+            errorCount++;
+        }
+
+        // Odds Buckets
+        const bucket = getBucket(bet.odd);
+        if (!oddBuckets[bucket]) oddBuckets[bucket] = { profit: 0, stake: 0, wins: 0, total: 0, avgOdd: 0 };
+        oddBuckets[bucket].profit += bet.profit;
+        oddBuckets[bucket].stake += bet.stake;
+        oddBuckets[bucket].total += 1;
+        oddBuckets[bucket].avgOdd += bet.odd;
+        if (bet.status === BetStatus.WON) oddBuckets[bucket].wins += 1;
+
+        // Timeline Push (Simplificado por aposta para suavidade ou agrupado por dia depois)
+        timelineData.push({
+            date: dateKey,
+            fullDate: new Date(bet.timestamp),
+            cumulativeProfit,
+            cumulativeEV,
+            drawdown,
+            profit: bet.profit
+        });
     });
 
-    // Distribuição
-    const profits = filteredData.map(b => b.profit);
-    const minP = profits.length ? Math.floor(Math.min(...profits)) : 0;
-    const maxP = profits.length ? Math.ceil(Math.max(...profits)) : 0;
-    const binCount = 10;
-    const step = (maxP - minP) / binCount || 1; // evita divisão por zero
-    
-    const distData = Array.from({ length: binCount }, (_, i) => {
-        const start = minP + (i * step);
-        const end = start + step;
-        const count = profits.filter(p => p >= start && p < end).length;
-        return { range: `${Math.floor(start)} a ${Math.floor(end)}`, count };
-    });
+    // --- PÓS-PROCESSAMENTO ---
 
-    // Odds Data Format
-    const oddsData = Object.entries(oddsMap).map(([range, data]) => ({
-        range,
-        winRate: data.total > 0 ? (data.wins / data.total) * 100 : 0,
-        volume: data.total,
-        profit: data.profit
+    // 1. Agrupar Timeline Diária para Volatilidade
+    const dailyTimeline = Object.entries(dailyMap).map(([date, data]) => ({
+        date,
+        profit: data.profit,
+        ev: data.ev
     }));
 
-    // Métricas Finais
+    // Calcular Desvio Padrão Móvel (Janela de 5 dias)
+    dailyTimeline.forEach((day, index) => {
+        const start = Math.max(0, index - 4);
+        const window = dailyTimeline.slice(start, index + 1);
+        const mean = window.reduce((acc, val) => acc + val.profit, 0) / window.length;
+        const variance = window.reduce((acc, val) => acc + Math.pow(val.profit - mean, 2), 0) / window.length;
+        volatilityData.push({ date: day.date, stdDev: Math.sqrt(variance) });
+    });
+
+    // 2. Ordenar Odds Buckets
+    const oddsChartData = Object.entries(oddBuckets).map(([range, data]) => ({
+        range,
+        roi: (data.profit / data.stake) * 100,
+        winRate: (data.wins / data.total) * 100,
+        avgOdd: data.avgOdd / data.total
+    })).sort((a, b) => a.range.localeCompare(b.range));
+
+    // 3. Top/Bottom Referees
+    const refereeChartData = Object.entries(refMap)
+        .map(([name, data]) => ({ name, profit: data.profit, count: data.count }))
+        .sort((a, b) => b.profit - a.profit) // Melhores primeiro
+        .filter(r => r.count >= 2); // Filtro mínimo de amostra
+    
+    // Pegar Top 5 e Bottom 5 se houver muitos
+    let finalRefData = refereeChartData;
+    if (refereeChartData.length > 10) {
+        finalRefData = [...refereeChartData.slice(0, 5), ...refereeChartData.slice(-5)];
+    }
+
+    // 4. Market Data
+    const marketChartData = Object.entries(typeMap).map(([name, data]) => ({
+        name, profit: data.profit
+    }));
+
     return {
-      filtered: filteredData,
-      kpis: {
-        totalProfit: accProfit,
-        roi: accStake > 0 ? (accProfit / accStake) * 100 : 0,
-        winRate: filteredData.length > 0 ? (wins / filteredData.length) * 100 : 0,
-        maxDD,
-        count: filteredData.length,
-        avgEdge: filteredData.reduce((sum, b) => sum + (b.edge || 0), 0) / (filteredData.length || 1)
-      },
-      timeSeries: timeSeriesData,
-      oddRanges: oddsData,
-      distribution: distData,
-      modelMetrics: {
-        maeIA: validComparisonCount ? totalErrorIA / validComparisonCount : 0,
-        maeBook: validComparisonCount ? totalErrorBook / validComparisonCount : 0,
-        diff: validComparisonCount ? ((totalErrorBook - totalErrorIA) / totalErrorBook) * 100 : 0
-      }
+        timelineData, // Para chart 1 e 6
+        dailyTimeline, // Para chart 2
+        scatterData, // Para chart 3
+        oddsChartData, // Para chart 4 e 5
+        finalRefData, // Para chart 8
+        marketChartData, // Para chart 9
+        volatilityData, // Para chart 10
+        errors: {
+            ia: errorCount ? totalIaError / errorCount : 0,
+            book: errorCount ? totalBookError / errorCount : 0
+        } // Para chart 7
     };
-  }, [bets, daysFilter, minEdge, minStake]);
 
-  // 3. INSIGHTS
-  const insights = useMemo(() => {
-    const i = [];
-    if (kpis.roi > 5) i.push("🔥 Sistema altamente lucrativo com ROI acima de 5%.");
-    if (kpis.roi < 0) i.push("⚠️ Atenção: ROI negativo no período selecionado.");
-    
-    // Encontrar melhor range com segurança
-    const bestRange = oddRanges.reduce((a, b) => a.profit > b.profit ? a : b, { profit: -Infinity, volume: 0, range: '' });
-    
-    if (bestRange.volume > 5) i.push(`🎯 Sua "Zona de Ouro" são odds ${bestRange.range} (Lucro: ${formatBRL(bestRange.profit)}).`);
-    
-    if (modelMetrics.maeIA > 0 && modelMetrics.maeIA < modelMetrics.maeBook) {
-        i.push(`🤖 A IA é ${modelMetrics.diff.toFixed(1)}% mais precisa que a Casa de Apostas.`);
-    } else if (modelMetrics.maeIA > 0) {
-        i.push(`📉 Cuidado: A Casa está precificando melhor que o modelo.`);
-    }
-
-    if (Math.abs(kpis.maxDD) > kpis.totalProfit * 0.5 && kpis.totalProfit > 0) {
-        i.push("🛡️ Risco Alto: Seu Drawdown histórico é >50% do lucro atual.");
-    }
-
-    return i;
-  }, [kpis, oddRanges, modelMetrics]);
-
+  }, [bets, dateRange]);
 
   return (
-    <div className="bg-slate-950 text-slate-200 p-8 min-h-screen font-sans">
+    <div className="space-y-8 animate-in fade-in duration-700">
       
-      {/* HEADER & CONTROLS */}
-      <header className="mb-8 flex flex-wrap justify-between items-end gap-4 border-b border-slate-800 pb-6">
-        <div>
-          <h1 className="text-3xl font-black text-white tracking-tight">AI Betting Intelligence</h1>
-          <p className="text-slate-400">Dashboard de Performance & Validação de Modelo</p>
-        </div>
-        
-        <div className="flex gap-3">
-          <div className="flex flex-col gap-1">
-            <label className="text-[10px] uppercase font-bold text-slate-500">Período</label>
-            <select 
-              value={daysFilter} 
-              onChange={e => setDaysFilter(+e.target.value)}
-              className="bg-slate-900 border border-slate-700 rounded p-2 text-sm focus:border-blue-500 outline-none"
-            >
-              <option value="7">7 Dias</option>
-              <option value="30">30 Dias</option>
-              <option value="90">3 Meses</option>
-              <option value="365">Todo o Tempo</option>
-            </select>
-          </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-[10px] uppercase font-bold text-slate-500">Edge Min.</label>
+      {/* FILTRO DE DATA */}
+      <div className="flex items-end gap-4 bg-slate-900/40 p-6 rounded-3xl border border-slate-800">
+        <div className="flex flex-col gap-2">
+            <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest flex items-center gap-2">
+                <CalendarIcon className="w-3 h-3"/> Data Inicial
+            </label>
             <input 
-              type="number" 
-              step="0.01"
-              value={minEdge}
-              onChange={e => setMinEdge(+e.target.value)}
-              className="bg-slate-900 border border-slate-700 rounded p-2 text-sm w-24"
+                type="date" 
+                value={dateRange.start}
+                onChange={(e) => setDateRange(prev => ({ ...prev, start: e.target.value }))}
+                className="bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-white font-bold outline-none focus:ring-2 focus:ring-blue-600"
             />
-          </div>
         </div>
-      </header>
-
-      {/* 1. SEÇÃO DE KPIS */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
-        <KPICard label="Lucro Líquido" value={formatBRL(kpis.totalProfit)} color={kpis.totalProfit >= 0 ? 'text-emerald-400' : 'text-red-400'} />
-        <KPICard label="ROI Atual" value={formatPct(kpis.roi)} sub={`em ${kpis.count} apostas`} />
-        <KPICard label="Win Rate" value={formatPct(kpis.winRate)} />
-        <KPICard label="Max Drawdown" value={formatBRL(kpis.maxDD)} color="text-red-400" />
-        <KPICard label="Precisão Modelo" value={`${modelMetrics.maeIA.toFixed(2)} MAE`} sub={`Bookie: ${modelMetrics.maeBook.toFixed(2)}`} />
+        <div className="flex flex-col gap-2">
+            <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest flex items-center gap-2">
+                 <CalendarIcon className="w-3 h-3"/> Data Final
+            </label>
+            <input 
+                type="date" 
+                value={dateRange.end}
+                onChange={(e) => setDateRange(prev => ({ ...prev, end: e.target.value }))}
+                className="bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-white font-bold outline-none focus:ring-2 focus:ring-blue-600"
+            />
+        </div>
+        <div className="ml-auto flex items-center gap-2 text-xs text-slate-500 font-medium bg-slate-800/50 px-4 py-2 rounded-lg">
+            <FunnelIcon className="w-4 h-4" />
+            Mostrando {data.scatterData.length} apostas filtradas
+        </div>
       </div>
 
-      {/* 2. INSIGHTS BOX */}
-      <div className="bg-blue-900/20 border border-blue-800/50 p-6 rounded-xl mb-8">
-        <h3 className="text-blue-400 font-bold mb-3 flex items-center gap-2">🧠 Insights da IA</h3>
-        <ul className="grid grid-cols-1 md:grid-cols-2 gap-2">
-            {insights.length > 0 ? insights.map((insight, idx) => (
-                <li key={idx} className="flex items-start gap-2 text-sm text-blue-100">
-                    <span>•</span> {insight}
-                </li>
-            )) : <li className="text-sm text-slate-500">Sem dados suficientes para gerar insights.</li>}
-        </ul>
-      </div>
-
-      {/* 3. GRÁFICOS TEMPORAIS */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
-        <Card title="Curva de Lucro & Drawdown" className="lg:col-span-2">
-          <ResponsiveContainer width="100%" height={300}>
-            <ComposedChart data={timeSeries}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.5} />
-              <XAxis dataKey="date" tick={{fill: '#94a3b8', fontSize: 10}} minTickGap={30} />
-              <YAxis yAxisId="left" tick={{fill: '#94a3b8', fontSize: 10}} tickFormatter={val => `R$${val}`} />
-              <Tooltip content={<CustomTooltip formatter={formatBRL} />} />
-              <Area yAxisId="left" type="monotone" dataKey="drawdown" fill="#ef4444" stroke="none" opacity={0.1} name="Drawdown" />
-              <Line yAxisId="left" type="monotone" dataKey="accProfit" stroke="#10b981" strokeWidth={2} dot={false} name="Lucro Acum." />
+      {/* --- LINHA 1: O GRANDE GRÁFICO (CHART 1) --- */}
+      <Card title="Lucro Acumulado & Drawdown" subtitle="Saúde Estrutural do Sistema" className="h-[400px]">
+        <ResponsiveContainer>
+            <ComposedChart data={data.timelineData}>
+                <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} opacity={0.5} />
+                <XAxis dataKey="date" hide />
+                <YAxis yAxisId="left" tickFormatter={val => `R$${val}`} stroke={COLORS.text} fontSize={10} />
+                <Tooltip content={<CustomTooltip formatter={formatCurrency} />} />
+                <Legend />
+                <Bar yAxisId="left" dataKey="drawdown" name="Drawdown" fill={COLORS.loss} opacity={0.3} barSize={4} />
+                <Line yAxisId="left" type="monotone" dataKey="cumulativeProfit" name="Lucro Acumulado" stroke={COLORS.profit} strokeWidth={3} dot={false} />
             </ComposedChart>
-          </ResponsiveContainer>
-        </Card>
+        </ResponsiveContainer>
+      </Card>
 
-        <Card title="Consistência do ROI">
-          <ResponsiveContainer width="100%" height={300}>
-            <LineChart data={timeSeries}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                <XAxis dataKey="date" tick={false} />
-                <YAxis tickFormatter={val => `${val}%`} tick={{fill: '#94a3b8', fontSize: 10}} />
-                <Tooltip content={<CustomTooltip formatter={formatPct} />} />
-                <ReferenceLine y={0} stroke="#ef4444" strokeDasharray="3 3" />
-                <Line type="step" dataKey="roi" stroke="#3b82f6" dot={false} strokeWidth={2} name="ROI %" />
-            </LineChart>
-          </ResponsiveContainer>
-        </Card>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
-          <Card title="Resultado Diário">
-            <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={timeSeries}>
-                    <XAxis dataKey="date" hide />
+      {/* --- LINHA 2: PULSO E STAKE (CHART 2 e 3) --- */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        <Card title="Resultado Diário" subtitle="Pulso Emocional">
+            <ResponsiveContainer>
+                <BarChart data={data.dailyTimeline}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} vertical={false} />
+                    <XAxis dataKey="date" tick={{fill: COLORS.text, fontSize: 10}} minTickGap={30} />
                     <YAxis hide />
-                    <Tooltip content={<CustomTooltip formatter={formatBRL} />} />
-                    <ReferenceLine y={0} stroke="#475569" />
-                    <Bar dataKey="dailyProfit" name="Lucro Dia">
-                        {timeSeries.map((entry: any, index: number) => (
-                            <Cell key={`cell-${index}`} fill={entry.dailyProfit >= 0 ? '#10b981' : '#ef4444'} />
+                    <Tooltip content={<CustomTooltip formatter={formatCurrency} />} />
+                    <ReferenceLine y={0} stroke={COLORS.text} />
+                    <Bar dataKey="profit" name="Lucro Dia">
+                        {data.dailyTimeline.map((entry, index) => (
+                            <Cell key={`cell-${index}`} fill={entry.profit >= 0 ? COLORS.profit : COLORS.loss} />
                         ))}
                     </Bar>
                 </BarChart>
             </ResponsiveContainer>
-          </Card>
+        </Card>
 
-          <Card title="Volume de Apostas">
-            <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={timeSeries}>
-                    <XAxis dataKey="date" hide />
-                    <Tooltip content={<CustomTooltip />} />
-                    <Bar dataKey="volume" fill="#64748b" name="Qtd Apostas" radius={[4, 4, 0, 0]} />
-                </BarChart>
+        <Card title="Stake vs Lucro" subtitle="Calibragem de Sizing">
+            <ResponsiveContainer>
+                <ScatterChart>
+                    <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} />
+                    <XAxis type="number" dataKey="stake" name="Stake" unit="R$" stroke={COLORS.text} fontSize={10} />
+                    <YAxis type="number" dataKey="profit" name="Lucro" unit="R$" stroke={COLORS.text} fontSize={10} />
+                    <Tooltip content={<CustomTooltip formatter={formatCurrency} />} cursor={{ strokeDasharray: '3 3' }} />
+                    <ReferenceLine y={0} stroke={COLORS.loss} strokeDasharray="3 3"/>
+                    <Scatter name="Apostas" data={data.scatterData} fill={COLORS.line} opacity={0.6} />
+                </ScatterChart>
             </ResponsiveContainer>
-          </Card>
-
-           <Card title="Distribuição de Profit (Histograma)">
-            <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={distribution}>
-                    <XAxis dataKey="range" tick={{fontSize: 10}} hide />
-                    <Tooltip content={<CustomTooltip />} />
-                    <Bar dataKey="count" fill="#8b5cf6" name="Frequência" />
-                </BarChart>
-            </ResponsiveContainer>
-          </Card>
+        </Card>
       </div>
 
-      {/* 4. ANÁLISE ESTRATÉGICA */}
-      <h2 className="text-xl font-bold text-white mb-4 mt-8">Análise de Estratégia</h2>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-          
-          <Card title="Win Rate & Volume por Faixa de Odd">
-            <ResponsiveContainer width="100%" height={300}>
-                <ComposedChart data={oddRanges}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                    <XAxis dataKey="range" tick={{fill: '#cbd5e1'}} />
-                    <YAxis yAxisId="left" orientation="left" tickFormatter={val => `${val}%`} />
-                    <YAxis yAxisId="right" orientation="right" />
+      {/* --- LINHA 3: ODDS ANALYSIS (CHART 4 e 5) --- */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        <Card title="ROI por Faixa de Odds" subtitle="Onde está o valor real?">
+            <ResponsiveContainer>
+                <BarChart data={data.oddsChartData} layout="vertical">
+                    <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} horizontal={false} />
+                    <XAxis type="number" tickFormatter={(val) => `${val}%`} stroke={COLORS.text} fontSize={10} />
+                    <YAxis type="category" dataKey="range" stroke={COLORS.text} fontSize={10} width={70} />
                     <Tooltip content={<CustomTooltip formatter={formatPct} />} />
-                    <Bar yAxisId="right" dataKey="volume" fill="#334155" opacity={0.5} name="Volume" />
-                    <Line yAxisId="left" type="monotone" dataKey="winRate" stroke="#f59e0b" strokeWidth={3} name="Win Rate" />
+                    <ReferenceLine x={0} stroke={COLORS.text} />
+                    <Bar dataKey="roi" name="ROI %">
+                        {data.oddsChartData.map((entry, index) => (
+                            <Cell key={`cell-${index}`} fill={entry.roi >= 0 ? COLORS.line : COLORS.loss} />
+                        ))}
+                    </Bar>
+                </BarChart>
+            </ResponsiveContainer>
+        </Card>
+
+        <Card title="Win Rate vs Odd Média" subtitle="Expectativa Matemática">
+            <ResponsiveContainer>
+                <ComposedChart data={data.oddsChartData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} />
+                    <XAxis dataKey="range" stroke={COLORS.text} fontSize={10} />
+                    <YAxis yAxisId="left" orientation="left" stroke={COLORS.profit} tickFormatter={(v) => `${v}%`} fontSize={10} />
+                    <YAxis yAxisId="right" orientation="right" stroke={COLORS.text} fontSize={10} domain={[1, 3]} />
+                    <Tooltip content={<CustomTooltip />} />
+                    <Legend />
+                    <Line yAxisId="left" type="monotone" dataKey="winRate" name="Win Rate %" stroke={COLORS.profit} strokeWidth={2} />
+                    <Line yAxisId="right" type="monotone" dataKey="avgOdd" name="Odd Média" stroke={COLORS.text} strokeWidth={1} strokeDasharray="5 5" />
                 </ComposedChart>
             </ResponsiveContainer>
-          </Card>
-
-          <Card title="Quem erra menos? (Mean Absolute Error)">
-            <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={[
-                    { name: 'Modelo IA', error: modelMetrics.maeIA, fill: '#10b981' },
-                    { name: 'Casa de Aposta', error: modelMetrics.maeBook, fill: '#ef4444' }
-                ]} layout="vertical">
-                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                    <XAxis type="number" tick={{fill: '#94a3b8'}} />
-                    <YAxis dataKey="name" type="category" width={100} tick={{fill: '#e2e8f0', fontWeight: 'bold'}} />
-                    <Tooltip cursor={{fill: 'transparent'}} content={<CustomTooltip />} />
-                    <Bar dataKey="error" barSize={40} name="Erro Médio (Unidades)" radius={[0, 4, 4, 0]} />
-                </BarChart>
-            </ResponsiveContainer>
-            <p className="text-xs text-slate-400 mt-4 text-center">
-                *Quanto menor a barra, mais preciso é o preditor.
-            </p>
-          </Card>
+        </Card>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <Card title="Correlação: Edge vs Lucro Real">
-            <ResponsiveContainer width="100%" height={300}>
-                <ScatterChart margin={{top: 10, right: 10, bottom: 10, left: 10}}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                    <XAxis type="number" dataKey="edge" name="Edge IA" tickFormatter={(v) => v.toFixed(2)} label={{ value: 'Edge Identificado', position: 'bottom', fill: '#64748b', fontSize: 10 }} />
-                    <YAxis type="number" dataKey="profit" name="Lucro" tickFormatter={(v) => `R$${v}`} />
-                    <Tooltip cursor={{ strokeDasharray: '3 3' }} content={<CustomTooltip formatter={formatBRL} />} />
-                    <ReferenceLine y={0} stroke="#ef4444" />
-                    <Scatter name="Apostas" data={filtered} fill="#8884d8">
-                        {filtered.map((entry: any, index: number) => (
-                            <Cell key={`cell-${index}`} fill={entry.profit >= 0 ? '#10b981' : '#ef4444'} />
-                        ))}
-                    </Scatter>
-                </ScatterChart>
+      {/* --- LINHA 4: INTELIGÊNCIA E MERCADO (CHART 6 e 7) --- */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <Card title="EV vs Realidade" subtitle="A sorte está influenciando?" className="lg:col-span-2">
+            <ResponsiveContainer>
+                <LineChart data={data.timelineData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} />
+                    <XAxis dataKey="date" hide />
+                    <YAxis tickFormatter={val => `R$${val}`} stroke={COLORS.text} fontSize={10} />
+                    <Tooltip content={<CustomTooltip formatter={formatCurrency} />} />
+                    <Legend />
+                    <Line type="monotone" dataKey="cumulativeProfit" name="Lucro Real" stroke={COLORS.profit} strokeWidth={3} dot={false} />
+                    <Line type="monotone" dataKey="cumulativeEV" name="EV (Esperado)" stroke={COLORS.line2} strokeWidth={2} strokeDasharray="5 5" dot={false} />
+                </LineChart>
             </ResponsiveContainer>
-          </Card>
+        </Card>
 
-           <Card title="Gestão de Stake: Tamanho da Aposta vs Retorno">
-            <ResponsiveContainer width="100%" height={300}>
-                <ScatterChart>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                    <XAxis type="number" dataKey="stake" name="Stake" unit="BRL" />
-                    <YAxis type="number" dataKey="profit" name="Lucro" unit="BRL" />
-                    <Tooltip cursor={{ strokeDasharray: '3 3' }} content={<CustomTooltip formatter={formatBRL} />} />
-                    <ReferenceLine y={0} stroke="#ef4444" />
-                    <Scatter name="Apostas" data={filtered} fill="#3b82f6" opacity={0.6} />
-                </ScatterChart>
+        <Card title="Qualidade da IA" subtitle="Erro Médio Absoluto (Faltas)">
+            <ResponsiveContainer>
+                <BarChart data={[
+                    { name: 'Modelo IA', error: data.errors.ia, fill: COLORS.profit },
+                    { name: 'Casa de Aposta', error: data.errors.book, fill: COLORS.loss }
+                ]}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} vertical={false} />
+                    <XAxis dataKey="name" stroke={COLORS.text} fontSize={12} fontWeight="bold" />
+                    <YAxis stroke={COLORS.text} fontSize={10} />
+                    <Tooltip content={<CustomTooltip />} cursor={{fill: 'transparent'}} />
+                    <Bar dataKey="error" name="Erro Médio" radius={[8, 8, 0, 0]} barSize={50} />
+                </BarChart>
             </ResponsiveContainer>
-          </Card>
+            <div className="mt-4 text-center text-[10px] text-slate-500">
+                *Quanto menor a barra, mais preciso é o preditor.
+            </div>
+        </Card>
+      </div>
+
+      {/* --- LINHA 5: SEGMENTAÇÃO (CHART 8, 9, 10) --- */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <Card title="Top & Flop Árbitros" subtitle="Lucro por Juiz">
+            <ResponsiveContainer>
+                <BarChart data={data.finalRefData} layout="vertical" margin={{left: 20}}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} horizontal={false} />
+                    <XAxis type="number" hide />
+                    <YAxis type="category" dataKey="name" stroke={COLORS.text} fontSize={9} width={90} />
+                    <Tooltip content={<CustomTooltip formatter={formatCurrency} />} />
+                    <ReferenceLine x={0} stroke={COLORS.text} />
+                    <Bar dataKey="profit" name="Lucro">
+                        {data.finalRefData.map((entry, index) => (
+                            <Cell key={`cell-${index}`} fill={entry.profit >= 0 ? COLORS.profit : COLORS.loss} />
+                        ))}
+                    </Bar>
+                </BarChart>
+            </ResponsiveContainer>
+        </Card>
+
+        <Card title="Especialidade" subtitle="Over vs Under">
+            <ResponsiveContainer>
+                <BarChart data={data.marketChartData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} vertical={false} />
+                    <XAxis dataKey="name" stroke={COLORS.text} fontSize={12} fontWeight="bold" />
+                    <YAxis hide />
+                    <Tooltip content={<CustomTooltip formatter={formatCurrency} />} cursor={{fill: 'transparent'}} />
+                    <ReferenceLine y={0} stroke={COLORS.text} />
+                    <Bar dataKey="profit" name="Lucro" radius={[8, 8, 8, 8]} barSize={60}>
+                         {data.marketChartData.map((entry, index) => (
+                            <Cell key={`cell-${index}`} fill={entry.profit >= 0 ? COLORS.line : COLORS.loss} />
+                        ))}
+                    </Bar>
+                </BarChart>
+            </ResponsiveContainer>
+        </Card>
+
+        <Card title="Volatilidade Diária" subtitle="Desvio Padrão (Risco)">
+            <ResponsiveContainer>
+                <AreaChart data={data.volatilityData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} />
+                    <XAxis dataKey="date" hide />
+                    <YAxis stroke={COLORS.text} fontSize={10} />
+                    <Tooltip content={<CustomTooltip />} />
+                    <Area type="monotone" dataKey="stdDev" name="Volatilidade" stroke={COLORS.loss} fill={COLORS.loss} fillOpacity={0.1} />
+                </AreaChart>
+            </ResponsiveContainer>
+        </Card>
       </div>
 
     </div>
   );
 };
 
-export default BettingAIDashboard;
+export default BIDashboard;
