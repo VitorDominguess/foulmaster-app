@@ -358,7 +358,7 @@ const BIDashboard: React.FC<BIDashboardProps> = ({ bets }) => {
 
       {/* --- LINHA 4: INTELIGÊNCIA E MERCADO (CHART 6 e 7) --- */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <Card title="EV vs Realidade" subtitle="A sorte está influenciando?" className="lg:col-span-2">
+        <Card title="EV vs Realidade" subtitle="A sorte está influenciando?" className="lg:col-span-2 h-[350px]">
             <ResponsiveContainer>
                 <LineChart data={data.timelineData}>
                     <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} />
@@ -372,7 +372,7 @@ const BIDashboard: React.FC<BIDashboardProps> = ({ bets }) => {
             </ResponsiveContainer>
         </Card>
 
-        <Card title="Qualidade da IA" subtitle="Erro Médio Absoluto (Faltas)">
+<Card title="Qualidade da IA" subtitle="Erro Médio Absoluto (Faltas)" className="h-[350px]">
             <ResponsiveContainer>
                 <BarChart data={[
                     { name: 'Modelo IA', error: data.errors.ia, fill: COLORS.profit },
@@ -385,7 +385,7 @@ const BIDashboard: React.FC<BIDashboardProps> = ({ bets }) => {
                     <Bar dataKey="error" name="Erro Médio" radius={[8, 8, 0, 0]} barSize={50} />
                 </BarChart>
             </ResponsiveContainer>
-            <div className="mt-4 text-center text-[10px] text-slate-500">
+            <div className="mt-2 text-center text-[10px] text-slate-500">
                 *Quanto menor a barra, mais preciso é o preditor.
             </div>
         </Card>
