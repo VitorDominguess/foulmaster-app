@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   PlusIcon, 
@@ -18,6 +17,7 @@ import {
   XMarkIcon,
   InformationCircleIcon,
   DocumentDuplicateIcon,
+  Square2StackIcon, // <--- NOME NOVO (CORRIGIDO)
   ArrowPathIcon,
   ServerIcon,
   KeyIcon,
@@ -82,32 +82,59 @@ const App: React.FC = () => {
     }
   }, [transactions]);
 
-  // Lógica Unificada de Stats
+  // ✅ NOVA LÓGICA UNIFICADA DE STATS (SALDO ATUAL VS ANTERIOR)
   const stats = useMemo(() => {
-    const baseBalance = transactions.reduce((acc, t) => 
-      t.type === TransactionType.DEPOSIT ? acc + t.amount : acc - t.amount, 0
-    );
+    // Definir o marco zero de hoje (00:00:00)
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    const todayTimestamp = startOfToday.getTime();
+
+    // Função auxiliar para calcular saldo até uma data de corte
+    const calculateBalanceUntil = (cutoff: number) => {
+      // 1. Transações (Depósitos/Saques) até a data
+      const txBalance = transactions
+        .filter(t => t.timestamp < cutoff)
+        .reduce((acc, t) => t.type === TransactionType.DEPOSIT ? acc + t.amount : acc - t.amount, 0);
+
+      // 2. Apostas feitas até a data
+      const relevantBets = bets.filter(b => b.timestamp < cutoff);
+      const totalStakes = relevantBets.reduce((acc, b) => acc + b.stake, 0);
+      
+      // 3. Retornos (Payouts) de apostas feitas até a data
+      const totalPayouts = relevantBets.reduce((acc, b) => {
+        if (b.status === BetStatus.WON) return acc + (b.stake * b.odd);
+        if (b.status === BetStatus.VOID) return acc + b.stake;
+        return acc;
+      }, 0);
+
+      return txBalance - totalStakes + totalPayouts;
+    };
+
+    // Saldo Atual (Considera tudo até agora + margem de segurança)
+    const balance = calculateBalanceUntil(Date.now() + 10000); 
     
-    const openBets = bets.filter(b => b.status === BetStatus.OPEN);
-    const openBetsTotalStake = openBets.reduce((acc, b) => acc + b.stake, 0);
+    // Saldo Anterior (Considera tudo até ontem 23:59:59)
+    const previousBalance = calculateBalanceUntil(todayTimestamp);
+
+    // Outros KPIs
     const settledBets = bets.filter(b => b.status !== BetStatus.OPEN);
-    
-    const totalPayouts = settledBets.reduce((acc, b) => {
-      if (b.status === BetStatus.WON) return acc + (b.stake * b.odd);
-      if (b.status === BetStatus.VOID) return acc + b.stake;
-      return acc;
-    }, 0);
-
-    const totalStakesEver = bets.reduce((acc, b) => acc + b.stake, 0);
-    const balance = baseBalance - totalStakesEver + totalPayouts;
-
     const totalProfit = settledBets.reduce((acc, b) => acc + b.profit, 0);
     const settledStakes = settledBets.reduce((acc, b) => acc + b.stake, 0);
     const wins = settledBets.filter(b => b.status === BetStatus.WON).length;
     const winRate = settledBets.length > 0 ? (wins / settledBets.length) * 100 : 0;
     const roi = settledStakes > 0 ? (totalProfit / settledStakes) * 100 : 0;
+    const openBetsTotalStake = bets.filter(b => b.status === BetStatus.OPEN).reduce((acc, b) => acc + b.stake, 0);
 
-    return { balance, totalProfit, winRate, roi, settledCount: settledBets.length, settledStakes, openBetsTotalStake };
+    return { 
+      balance, 
+      previousBalance, // Novo campo
+      totalProfit, 
+      winRate, 
+      roi, 
+      settledCount: settledBets.length,
+      settledStakes, 
+      openBetsTotalStake 
+    };
   }, [bets, transactions]);
 
   const canAction = (timestamp: number) => {
@@ -274,7 +301,27 @@ const App: React.FC = () => {
               <StatsCard label="Lucro Líquido" value={`R$ ${stats.totalProfit.toFixed(2)}`} icon={<ChartBarIcon className="w-6 h-6" />} trend={stats.totalProfit >= 0 ? 'up' : 'down'} />
               <StatsCard label="ROI Final" value={`${stats.roi.toFixed(2)}%`} icon={<ArrowUpRightIcon className="w-6 h-6" />} trend={stats.roi >= 0 ? 'up' : 'down'} />
               <StatsCard label="Win Rate" value={`${stats.winRate.toFixed(1)}%`} subValue={`${stats.settledCount} resolvidos`} icon={<CheckCircleIcon className="w-6 h-6" />} trend="neutral" />
-              <StatsCard label="Banca Total" value={`R$ ${stats.balance.toFixed(2)}`} icon={<WalletIcon className="w-6 h-6" />} trend="neutral" />
+              
+              {/* ✅ CARD DE BANCA TOTAL ATUALIZADO */}
+              {(() => {
+                const diff = stats.balance - stats.previousBalance;
+                const percent = stats.previousBalance !== 0 
+                  ? ((diff / stats.previousBalance) * 100) 
+                  : 0;
+                
+                const trendDir = diff === 0 ? 'neutral' : diff > 0 ? 'up' : 'down';
+                const subText = `${Math.abs(percent).toFixed(1)}% vs Anterior: R$ ${stats.previousBalance.toFixed(2)}`;
+
+                return (
+                  <StatsCard 
+                    label="Banca Total" 
+                    value={`R$ ${stats.balance.toFixed(2)}`} 
+                    subValue={subText}
+                    icon={<WalletIcon className="w-6 h-6" />} 
+                    trend={trendDir} 
+                  />
+                );
+              })()}
             </div>
             <BIDashboard bets={bets} />
           </div>
@@ -475,12 +522,12 @@ const App: React.FC = () => {
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-10 relative z-10">
                   <div className="space-y-2">
-                     <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Supabase Project URL</label>
-                     <input type="text" placeholder="https://xyz.supabase.co" value={syncConfig.url} onChange={e => setSyncConfig({...syncConfig, url: e.target.value})} className="w-full bg-slate-950 border border-slate-800 p-4 rounded-2xl outline-none focus:ring-2 focus:ring-blue-600 font-medium text-sm transition-all" />
+                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Supabase Project URL</label>
+                      <input type="text" placeholder="https://xyz.supabase.co" value={syncConfig.url} onChange={e => setSyncConfig({...syncConfig, url: e.target.value})} className="w-full bg-slate-950 border border-slate-800 p-4 rounded-2xl outline-none focus:ring-2 focus:ring-blue-600 font-medium text-sm transition-all" />
                   </div>
                   <div className="space-y-2">
-                     <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Anon Key</label>
-                     <input type="password" placeholder="Chave pública do projeto" value={syncConfig.key} onChange={e => setSyncConfig({...syncConfig, key: e.target.value})} className="w-full bg-slate-950 border border-slate-800 p-4 rounded-2xl outline-none focus:ring-2 focus:ring-blue-600 font-medium text-sm transition-all" />
+                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Anon Key</label>
+                      <input type="password" placeholder="Chave pública do projeto" value={syncConfig.key} onChange={e => setSyncConfig({...syncConfig, key: e.target.value})} className="w-full bg-slate-950 border border-slate-800 p-4 rounded-2xl outline-none focus:ring-2 focus:ring-blue-600 font-medium text-sm transition-all" />
                   </div>
                 </div>
 
@@ -496,14 +543,19 @@ const App: React.FC = () => {
                       <p>2. Em <strong>Settings API</strong>, copie a URL e a Anon Key nos campos acima.</p>
                       <p>3. No <strong>SQL Editor</strong>, execute o comando abaixo para criar a tabela de dados:</p>
                       <div className="relative group">
-                         <pre className="bg-slate-900 p-6 rounded-2xl text-[11px] font-mono text-blue-400 border border-blue-500/20 overflow-x-auto">
+                          <pre className="bg-slate-900 p-6 rounded-2xl text-[11px] font-mono text-blue-400 border border-blue-500/20 overflow-x-auto">
 {`create table user_data (
   id text primary key,
   content jsonb,
   updated_at timestamp with time zone default now()
 );`}
-                         </pre>
-                         <button onClick={() => navigator.clipboard.writeText("create table user_data (id text primary key, content jsonb, updated_at timestamp with time zone default now());")} className="absolute top-4 right-4 p-2.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-400 transition-all shadow-md"><DocumentDuplicateIcon className="w-4 h-4" /></button>
+                          </pre>
+                          <button 
+                            onClick={() => navigator.clipboard.writeText("create table user_data (id text primary key, content jsonb, updated_at timestamp with time zone default now());")} 
+                            className="absolute top-4 right-4 p-2.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-400 transition-all shadow-md"
+                          >
+                            <Square2StackIcon className="w-4 h-4" /> {/* <--- USO CORRIGIDO */}
+                          </button>
                       </div>
                    </div>
                 </div>

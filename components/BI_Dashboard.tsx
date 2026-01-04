@@ -8,12 +8,12 @@ import {
   Bar,
   ScatterChart,
   Scatter,
-  AreaChart,
+  AreaChart, // Importação corrigida
+  Area,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
-  Area,
   ReferenceLine,
   Cell,
   Legend,
@@ -40,14 +40,15 @@ const COLORS = {
 const formatCurrency = (val: number) => `R$ ${val.toFixed(2)}`;
 const formatPct = (val: number) => `${val.toFixed(1)}%`;
 
-// --- COMPONENTES UI ---
+// --- COMPONENTES UI (AJUSTADO PARA NÃO ESTOURAR ALTURA) ---
 const Card = ({ title, subtitle, children, className = '' }: any) => (
   <div className={`bg-slate-900/60 border border-slate-800 rounded-3xl p-6 shadow-xl backdrop-blur-sm flex flex-col ${className}`}>
-    <div className="mb-6">
+    <div className="mb-4 shrink-0">
       <h3 className="text-slate-100 font-bold text-lg">{title}</h3>
       {subtitle && <p className="text-slate-500 text-xs uppercase tracking-wider font-bold mt-1">{subtitle}</p>}
     </div>
-    <div className="flex-1 w-full min-h-[250px]">
+    {/* min-h-0 é crucial para o ResponsiveContainer respeitar a altura do pai flex */}
+    <div className="flex-1 w-full min-h-0">
       {children}
     </div>
   </div>
@@ -130,7 +131,7 @@ const BIDashboard: React.FC<BIDashboardProps> = ({ bets }) => {
         peakProfit = Math.max(peakProfit, cumulativeProfit);
         const drawdown = cumulativeProfit - peakProfit;
         
-        // EV Calc (Stake * (%Edge / 100)) - Assumindo que bet.edge é % (ex: 5.2)
+        // EV Calc
         const evValue = bet.stake * ((bet.edge || 0) / 100);
         cumulativeEV += evValue;
 
@@ -170,7 +171,7 @@ const BIDashboard: React.FC<BIDashboardProps> = ({ bets }) => {
         oddBuckets[bucket].avgOdd += bet.odd;
         if (bet.status === BetStatus.WON) oddBuckets[bucket].wins += 1;
 
-        // Timeline Push (Simplificado por aposta para suavidade ou agrupado por dia depois)
+        // Timeline Push
         timelineData.push({
             date: dateKey,
             fullDate: new Date(bet.timestamp),
@@ -210,10 +211,9 @@ const BIDashboard: React.FC<BIDashboardProps> = ({ bets }) => {
     // 3. Top/Bottom Referees
     const refereeChartData = Object.entries(refMap)
         .map(([name, data]) => ({ name, profit: data.profit, count: data.count }))
-        .sort((a, b) => b.profit - a.profit) // Melhores primeiro
-        .filter(r => r.count >= 2); // Filtro mínimo de amostra
+        .sort((a, b) => b.profit - a.profit)
+        .filter(r => r.count >= 2);
     
-    // Pegar Top 5 e Bottom 5 se houver muitos
     let finalRefData = refereeChartData;
     if (refereeChartData.length > 10) {
         finalRefData = [...refereeChartData.slice(0, 5), ...refereeChartData.slice(-5)];
@@ -225,17 +225,17 @@ const BIDashboard: React.FC<BIDashboardProps> = ({ bets }) => {
     }));
 
     return {
-        timelineData, // Para chart 1 e 6
-        dailyTimeline, // Para chart 2
-        scatterData, // Para chart 3
-        oddsChartData, // Para chart 4 e 5
-        finalRefData, // Para chart 8
-        marketChartData, // Para chart 9
-        volatilityData, // Para chart 10
+        timelineData,
+        dailyTimeline,
+        scatterData,
+        oddsChartData,
+        finalRefData,
+        marketChartData,
+        volatilityData,
         errors: {
             ia: errorCount ? totalIaError / errorCount : 0,
             book: errorCount ? totalBookError / errorCount : 0
-        } // Para chart 7
+        }
     };
 
   }, [bets, dateRange]);
@@ -290,7 +290,7 @@ const BIDashboard: React.FC<BIDashboardProps> = ({ bets }) => {
 
       {/* --- LINHA 2: PULSO E STAKE (CHART 2 e 3) --- */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        <Card title="Resultado Diário" subtitle="Pulso Emocional">
+        <Card title="Resultado Diário" subtitle="Pulso Emocional" className="h-[350px]">
             <ResponsiveContainer>
                 <BarChart data={data.dailyTimeline}>
                     <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} vertical={false} />
@@ -307,7 +307,7 @@ const BIDashboard: React.FC<BIDashboardProps> = ({ bets }) => {
             </ResponsiveContainer>
         </Card>
 
-        <Card title="Stake vs Lucro" subtitle="Calibragem de Sizing">
+        <Card title="Stake vs Lucro" subtitle="Calibragem de Sizing" className="h-[350px]">
             <ResponsiveContainer>
                 <ScatterChart>
                     <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} />
@@ -323,7 +323,7 @@ const BIDashboard: React.FC<BIDashboardProps> = ({ bets }) => {
 
       {/* --- LINHA 3: ODDS ANALYSIS (CHART 4 e 5) --- */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        <Card title="ROI por Faixa de Odds" subtitle="Onde está o valor real?">
+        <Card title="ROI por Faixa de Odds" subtitle="Onde está o valor real?" className="h-[350px]">
             <ResponsiveContainer>
                 <BarChart data={data.oddsChartData} layout="vertical">
                     <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} horizontal={false} />
@@ -340,7 +340,7 @@ const BIDashboard: React.FC<BIDashboardProps> = ({ bets }) => {
             </ResponsiveContainer>
         </Card>
 
-        <Card title="Win Rate vs Odd Média" subtitle="Expectativa Matemática">
+        <Card title="Win Rate vs Odd Média" subtitle="Expectativa Matemática" className="h-[350px]">
             <ResponsiveContainer>
                 <ComposedChart data={data.oddsChartData}>
                     <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} />
@@ -356,7 +356,7 @@ const BIDashboard: React.FC<BIDashboardProps> = ({ bets }) => {
         </Card>
       </div>
 
-      {/* --- LINHA 4: INTELIGÊNCIA E MERCADO (CHART 6 e 7) --- */}
+      {/* --- LINHA 4: INTELIGÊNCIA E MERCADO (FIXED HEIGHT) --- */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <Card title="EV vs Realidade" subtitle="A sorte está influenciando?" className="lg:col-span-2 h-[350px]">
             <ResponsiveContainer>
@@ -372,7 +372,7 @@ const BIDashboard: React.FC<BIDashboardProps> = ({ bets }) => {
             </ResponsiveContainer>
         </Card>
 
-<Card title="Qualidade da IA" subtitle="Erro Médio Absoluto (Faltas)" className="h-[350px]">
+        <Card title="Qualidade da IA" subtitle="Erro Médio Absoluto (Faltas)" className="h-[350px]">
             <ResponsiveContainer>
                 <BarChart data={[
                     { name: 'Modelo IA', error: data.errors.ia, fill: COLORS.profit },
@@ -393,7 +393,7 @@ const BIDashboard: React.FC<BIDashboardProps> = ({ bets }) => {
 
       {/* --- LINHA 5: SEGMENTAÇÃO (CHART 8, 9, 10) --- */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <Card title="Top & Flop Árbitros" subtitle="Lucro por Juiz">
+        <Card title="Top & Flop Árbitros" subtitle="Lucro por Juiz" className="h-[350px]">
             <ResponsiveContainer>
                 <BarChart data={data.finalRefData} layout="vertical" margin={{left: 20}}>
                     <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} horizontal={false} />
@@ -410,7 +410,7 @@ const BIDashboard: React.FC<BIDashboardProps> = ({ bets }) => {
             </ResponsiveContainer>
         </Card>
 
-        <Card title="Especialidade" subtitle="Over vs Under">
+        <Card title="Especialidade" subtitle="Over vs Under" className="h-[350px]">
             <ResponsiveContainer>
                 <BarChart data={data.marketChartData}>
                     <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} vertical={false} />
@@ -427,7 +427,7 @@ const BIDashboard: React.FC<BIDashboardProps> = ({ bets }) => {
             </ResponsiveContainer>
         </Card>
 
-        <Card title="Volatilidade Diária" subtitle="Desvio Padrão (Risco)">
+        <Card title="Volatilidade Diária" subtitle="Desvio Padrão (Risco)" className="h-[350px]">
             <ResponsiveContainer>
                 <AreaChart data={data.volatilityData}>
                     <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} />
