@@ -276,7 +276,7 @@ const App: React.FC = () => {
               <StatsCard label="Win Rate" value={`${stats.winRate.toFixed(1)}%`} subValue={`${stats.settledCount} resolvidos`} icon={<CheckCircleIcon className="w-6 h-6" />} trend="neutral" />
               <StatsCard label="Banca Total" value={`R$ ${stats.balance.toFixed(2)}`} icon={<WalletIcon className="w-6 h-6" />} trend="neutral" />
             </div>
-            <BIDashboard bets={bets} currentBalance={stats.balance} />
+            <BIDashboard bets={bets} />
           </div>
         )}
 
